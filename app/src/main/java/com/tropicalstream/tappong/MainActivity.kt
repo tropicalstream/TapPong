@@ -2,8 +2,10 @@ package com.tropicalstream.tappong
 
 import android.app.Activity
 import android.content.Context
+import android.content.Intent
 import android.content.res.Configuration
 import android.graphics.Color
+import android.net.Uri
 import android.os.Bundle
 import android.os.SystemClock
 import android.util.DisplayMetrics
@@ -25,7 +27,8 @@ import com.tropicalstream.tappong.ui.BinocularSbsLayout
  * Controls (right temple pad):
  *   slide up/down — move your paddle (continuous, velocity adds english)
  *   tap           — start / serve early / restart / resume
- *   long-press    — pause
+ *   double-tap    — pause / resume
+ *   long-hold     — RayNeo system Control Center / exit
  */
 class MainActivity : Activity() {
 
@@ -38,7 +41,9 @@ class MainActivity : Activity() {
     private val particles = Particles()
     private val gestures = TrackpadGestureEngine()
     private val sfx by lazy { Sfx(this) }
+    private lateinit var settings: SettingsStore
     private lateinit var view: PongView
+    private var introFocus = 0
 
     private var running = false
     private var lastFrameMs = 0L
@@ -54,6 +59,8 @@ class MainActivity : Activity() {
     override fun onCreate(savedInstanceState: Bundle?) {
         super.onCreate(savedInstanceState)
         configureImmersive()
+        settings = SettingsStore(this)
+        applySettings()
 
         view = PongView(this, game, particles)
         val root = BinocularSbsLayout(this).apply {
@@ -61,19 +68,70 @@ class MainActivity : Activity() {
             addView(view)
         }
         setContentView(root)
+        syncIntroView()
 
         gestures.setScreenSize(640, 480)
         gestures.onDrag = { _, dy -> game.movePlayerBy(dy * DRAG_GAIN) }
         gestures.onTap = {
-            val wasIdle = game.state == PongGame.State.READY ||
-                game.state == PongGame.State.GAMEOVER
-            game.onTap()
-            if (wasIdle) sfx.play(Sfx.START)
+            if (game.state == PongGame.State.READY) {
+                if (introFocus == 0) {
+                    applySettings()
+                    game.onTap()
+                    sfx.play(Sfx.START)
+                } else adjustIntroSetting(+1)
+            } else {
+                val wasGameOver = game.state == PongGame.State.GAMEOVER
+                game.onTap()
+                if (wasGameOver) sfx.play(Sfx.START)
+            }
         }
-        gestures.onLongTap = { game.togglePause() }
+        gestures.onSwipeVertical = { direction ->
+            if (game.state == PongGame.State.READY) {
+                introFocus = (introFocus + direction).mod(4)
+                syncIntroView()
+                sfx.play(Sfx.COUNT, pitch = 1.15f, vol = 0.55f)
+            }
+        }
+        gestures.onSwipeHorizontal = { direction ->
+            if (game.state == PongGame.State.READY && introFocus != 0) {
+                adjustIntroSetting(direction)
+            }
+        }
+        gestures.onDoubleTap = { game.togglePause() }
+        gestures.onLongTap = { openRayNeoControlCenter() }
 
         wireGameEvents()
         sfx.loadAsync()
+    }
+
+    private fun adjustIntroSetting(direction: Int) {
+        when (introFocus) {
+            1 -> {
+                val values = PongGame.Difficulty.entries
+                val i = values.indexOf(settings.difficulty)
+                settings.difficulty = values[(i + direction).mod(values.size)]
+            }
+            2 -> settings.powerUps = !settings.powerUps
+            3 -> settings.sound = !settings.sound
+        }
+        applySettings()
+        syncIntroView()
+        sfx.play(Sfx.COUNT, pitch = 1.3f, vol = 0.6f)
+    }
+
+    private fun applySettings() {
+        game.difficulty = settings.difficulty
+        game.powerUpsEnabled = settings.powerUps
+        sfx.volume = if (settings.sound) 0.6f else 0f
+    }
+
+    private fun syncIntroView() {
+        if (!::view.isInitialized) return
+        view.introFocus = introFocus
+        view.introDifficulty = settings.difficulty
+        view.introPowerUps = settings.powerUps
+        view.introSound = settings.sound
+        view.invalidate()
     }
 
     private fun wireGameEvents() {
@@ -154,6 +212,21 @@ class MainActivity : Activity() {
         super.onDestroy()
         gestures.release()
         sfx.release()
+    }
+
+    /** Open the genuine X3 launcher panel, with HOME as a firmware-safe escape. */
+    private fun openRayNeoControlCenter() {
+        val controlCenter = Intent(
+            Intent.ACTION_VIEW,
+            Uri.parse("mercury://com.ffalconxr.mercury.launcher/openApp/shortcut")
+        ).addCategory(Intent.CATEGORY_DEFAULT)
+        runCatching { startActivity(controlCenter) }
+            .onFailure {
+                val home = Intent(Intent.ACTION_MAIN)
+                    .addCategory(Intent.CATEGORY_HOME)
+                    .addFlags(Intent.FLAG_ACTIVITY_NEW_TASK)
+                runCatching { startActivity(home); finishAndRemoveTask() }
+            }
     }
 
     // Temple FIRM-click arrives as a KEY — check first so nothing swallows it.

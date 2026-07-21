@@ -26,7 +26,8 @@ class TrackpadGestureEngine {
     companion object {
         const val SHORT_TAP_MAX_MS = 300L
         const val DOUBLE_TAP_WINDOW_MS = 300L
-        const val LONG_TAP_MIN_MS = 600L
+        const val LONG_TAP_MIN_MS = 550L
+        const val SYSTEM_HOLD_MS = 450L
         const val KEY_TAP_MAX_MS = 400L
         const val ECHO_MIN_GAP_MS = 40L
         const val CROSS_SOURCE_DEDUP_MS = 250L
@@ -90,13 +91,7 @@ class TrackpadGestureEngine {
 
     private var keyDownMs = 0L
     private var keyTracking = false
-    private var keyLongFired = false
-    private val keyLongCheck = Runnable {
-        if (keyTracking) {
-            keyLongFired = true
-            onLongTap?.invoke()
-        }
-    }
+    private var keyHeld = false
 
     private var touchDownMs = 0L
     private var touchStartX = 0f
@@ -228,17 +223,22 @@ class TrackpadGestureEngine {
                 if (event.repeatCount == 0) {
                     keyDownMs = SystemClock.uptimeMillis()
                     keyTracking = true
-                    keyLongFired = false
-                    handler.postDelayed(keyLongCheck, LONG_TAP_MIN_MS)
-                }
-                return true
+                    keyHeld = event.isLongPress
+                } else keyHeld = true
+                // Let the RayNeo launcher observe the full long-key sequence.
+                return false
             }
             KeyEvent.ACTION_UP -> {
-                handler.removeCallbacks(keyLongCheck)
-                if (!keyTracking) return true
+                if (!keyTracking) return false
                 keyTracking = false
-                if (keyLongFired) return true
                 val held = SystemClock.uptimeMillis() - keyDownMs
+                if (keyHeld || event.isCanceled ||
+                    maxOf(held, event.eventTime - event.downTime) >= SYSTEM_HOLD_MS
+                ) {
+                    keyHeld = false
+                    return false
+                }
+                keyHeld = false
                 if (held < KEY_TAP_MAX_MS) registerTap(SRC_KEY)
                 return true
             }

@@ -29,6 +29,11 @@ class PongView(
     private val particles: Particles
 ) : View(context) {
 
+    var introFocus = 0
+    var introDifficulty = PongGame.Difficulty.CLASSIC
+    var introPowerUps = true
+    var introSound = true
+
     companion object {
         const val CYAN = 0xFF00E5FF.toInt()
         const val MAGENTA = 0xFFFF2E97.toInt()
@@ -281,14 +286,26 @@ class PongView(
         when (game.state) {
             PongGame.State.READY -> {
                 title(canvas, "TAPPONG", CYAN)
+                val rows = arrayOf(
+                    "PLAY — FIRST TO ${PongGame.WIN_SCORE}",
+                    "DIFFICULTY  ${introDifficulty.label}",
+                    "POWER-UPS  ${if (introPowerUps) "ON" else "OFF"}",
+                    "SOUND  ${if (introSound) "ON" else "OFF"}"
+                )
                 text.textSize = 15f
-                text.color = WHITE
+                text.alpha = 235
+                for (i in rows.indices) {
+                    text.color = if (i == introFocus) GOLD else WHITE
+                    canvas.drawText((if (i == introFocus) "▶ " else "  ") + rows[i],
+                        width / 2f, 252f + i * 34f, text)
+                }
+                text.textSize = 11f
+                text.color = DIM
                 text.alpha = 220
-                canvas.drawText("slide finger — move paddle", width / 2f, height * 0.60f, text)
-                canvas.drawText("catch drifting power-ups with the ball", width / 2f, height * 0.66f, text)
-                text.color = GOLD
-                val blink = (frameTime / 500) % 2 == 0L
-                if (blink) canvas.drawText("TAP TO PLAY  ·  first to ${PongGame.WIN_SCORE}", width / 2f, height * 0.76f, text)
+                canvas.drawText("swipe ↑↓ choose  ·  swipe ←→ change  ·  tap select",
+                    width / 2f, 414f, text)
+                canvas.drawText("in match: slide = paddle  ·  double-tap = pause",
+                    width / 2f, 438f, text)
             }
             PongGame.State.SERVING -> {
                 val n = game.serveCountdown.toInt() + 1

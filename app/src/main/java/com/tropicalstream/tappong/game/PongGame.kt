@@ -24,6 +24,9 @@ import kotlin.random.Random
 class PongGame {
 
     enum class State { READY, SERVING, PLAYING, POINT, GAMEOVER, PAUSED }
+    enum class Difficulty(val label: String) {
+        RELAXED("RELAXED"), CLASSIC("CLASSIC"), ACE("ACE")
+    }
 
     class Ball(
         var x: Float, var y: Float,
@@ -92,6 +95,8 @@ class PongGame {
     var shrinkFoeLeft = 0f; private set
     var turboLeft = 0f; private set
     var lastPointToPlayer = false; private set
+    var difficulty = Difficulty.CLASSIC
+    var powerUpsEnabled = true
 
     // ---- events (host wires sounds/particles) ----
     var onPaddleHit: ((x: Float, y: Float, byPlayer: Boolean, rally: Int) -> Unit)? = null
@@ -152,6 +157,7 @@ class PongGame {
         rally = 0; bestRally = 0
         playerH = PADDLE_BASE_H; aiH = PADDLE_BASE_H
         growLeft = 0f; shrinkFoeLeft = 0f; turboLeft = 0f
+        aiGrowLeft = 0f; playerShrinkLeft = 0f
         balls.clear(); powerUps.clear()
         powerSpawnIn = 6f
         serveTowardPlayer = rng.nextBoolean()
@@ -172,8 +178,8 @@ class PongGame {
         balls.add(
             Ball(
                 x = W / 2f, y = (COURT_TOP + COURT_BOTTOM) / 2f,
-                vx = cos(ang) * BALL_SPEED_0 * dir,
-                vy = sin(ang) * BALL_SPEED_0
+                vx = cos(ang) * initialBallSpeed() * dir,
+                vy = sin(ang) * initialBallSpeed()
             )
         )
         state = State.PLAYING
@@ -258,13 +264,18 @@ class PongGame {
      */
     private fun updateAi(dt: Float) {
         val scoreEdge = (playerScore - aiScore).coerceIn(-5, 5)
-        val maxSpeed = 250f + scoreEdge * 38f          // losing AI moves faster
+        val tuning = when (difficulty) {
+            Difficulty.RELAXED -> AiTuning(205f, 24f, 40f, 5f, 0.19f)
+            Difficulty.CLASSIC -> AiTuning(250f, 38f, 14f, 7f, 0.12f)
+            Difficulty.ACE -> AiTuning(310f, 44f, 7f, 3f, 0.075f)
+        }
+        val maxSpeed = tuning.baseSpeed + scoreEdge * tuning.comebackSpeed
         val inbound = balls.filter { it.vx > 0f }
             .minByOrNull { AI_X - it.x }
 
         aiRetargetIn -= dt
         if (aiRetargetIn <= 0f) {
-            aiRetargetIn = 0.12f
+            aiRetargetIn = tuning.reactionSeconds
             aiTargetY = if (inbound != null) {
                 val t = ((AI_X - inbound.x) / inbound.vx).coerceAtLeast(0f)
                 var predicted = inbound.y + inbound.vy * t
@@ -274,7 +285,8 @@ class PongGame {
                 if (folded < 0) folded += span * 2
                 predicted = COURT_TOP + BALL_R + if (folded > span) span * 2 - folded else folded
                 // aim error grows when the AI is comfortably ahead
-                val err = (14f - scoreEdge * 7f).coerceIn(4f, 52f)
+                val err = (tuning.aimError - scoreEdge * tuning.comebackAccuracy)
+                    .coerceIn(if (difficulty == Difficulty.ACE) 2f else 4f, 70f)
                 predicted + (rng.nextFloat() * 2f - 1f) * err
             } else {
                 (COURT_TOP + COURT_BOTTOM) / 2f
@@ -289,6 +301,10 @@ class PongGame {
     // ------------------------------------------------------------ power-ups
 
     private fun updatePowerUps(dt: Float) {
+        if (!powerUpsEnabled) {
+            powerUps.clear()
+            return
+        }
         powerSpawnIn -= dt
         if (powerSpawnIn <= 0f && powerUps.size < 2) {
             powerSpawnIn = 7f + rng.nextFloat() * 5f
@@ -435,8 +451,8 @@ class PongGame {
         val paddleVel = if (byPlayer) playerVel else aiVel
         val offset = ((b.y - paddleY) / (paddleH / 2f)).coerceIn(-1f, 1f)
         val speed = min(
-            BALL_SPEED_MAX,
-            (kotlin.math.hypot(b.vx, b.vy)) * RALLY_RAMP
+            maxBallSpeed(),
+            (kotlin.math.hypot(b.vx, b.vy)) * rallyRamp()
         )
         val ang = offset * MAX_BOUNCE_DEG * (Math.PI / 180f).toFloat()
         val dir = if (byPlayer) 1f else -1f
@@ -451,4 +467,30 @@ class PongGame {
         if (rally > bestRally) bestRally = rally
         onPaddleHit?.invoke(b.x, b.y, byPlayer, rally)
     }
+
+    private fun initialBallSpeed() = when (difficulty) {
+        Difficulty.RELAXED -> 225f
+        Difficulty.CLASSIC -> BALL_SPEED_0
+        Difficulty.ACE -> 275f
+    }
+
+    private fun maxBallSpeed() = when (difficulty) {
+        Difficulty.RELAXED -> 620f
+        Difficulty.CLASSIC -> BALL_SPEED_MAX
+        Difficulty.ACE -> 780f
+    }
+
+    private fun rallyRamp() = when (difficulty) {
+        Difficulty.RELAXED -> 1.045f
+        Difficulty.CLASSIC -> RALLY_RAMP
+        Difficulty.ACE -> 1.06f
+    }
+
+    private data class AiTuning(
+        val baseSpeed: Float,
+        val comebackSpeed: Float,
+        val aimError: Float,
+        val comebackAccuracy: Float,
+        val reactionSeconds: Float
+    )
 }
